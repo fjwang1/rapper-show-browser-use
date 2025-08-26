@@ -12,9 +12,7 @@ Rapper演出信息搜索API服务
 """
 
 import asyncio
-import json
-import os
-from typing import List, Optional
+from typing import Optional
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -22,12 +20,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
-from browser_use import Agent, Controller
-from browser_use.llm import ChatDeepSeek
 from browser_use.logging_config import setup_logging
-from browser_use.agent.views import AgentHistoryList
 
-from rapper_search_service import RapperSearchService
+from api.rapper_search_service import RapperSearchService
 
 
 # API请求和响应模型
@@ -37,32 +32,11 @@ class SearchRequest(BaseModel):
     timeout_seconds: Optional[int] = Field(300, description="搜索超时时间（秒）", ge=30, le=600)
 
 
-class TicketPrice(BaseModel):
-    """票价信息模型"""
-    presale: str = Field(..., description="预售价格")
-    regular: str = Field(..., description="正价")
-    vip: str = Field(..., description="VIP价格")
-
-
-class PerformanceInfo(BaseModel):
-    """单个演出信息模型"""
-    address: str = Field(..., description="演出地址")
-    venue: str = Field(..., description="演出场地")
-    date: str = Field(..., description="演出时间")
-    guest: List[str] = Field(default_factory=list, description="演出嘉宾")
-    ticket_prices: TicketPrice = Field(..., description="票价信息")
-    performance_url: str = Field(..., description="演出链接")
-
-
-class SearchResponse(BaseModel):
-    """搜索响应模型"""
-    success: bool = Field(..., description="搜索是否成功")
-    rapper_name: str = Field(..., description="搜索的rapper名字")
-    performances: List[PerformanceInfo] = Field(default_factory=list, description="演出信息列表")
-    total_count: int = Field(..., description="找到的演出总数")
-    search_time: str = Field(..., description="搜索时间")
-    execution_stats: dict = Field(default_factory=dict, description="执行统计信息")
-    error_message: Optional[str] = Field(None, description="错误信息")
+class AsyncAckResponse(BaseModel):
+    """异步任务提交确认响应模型"""
+    success: bool = Field(True, description="是否提交成功")
+    message: str = Field("任务已提交", description="提示信息")
+    rapper_name: str = Field(..., description="提交的rapper名字")
 
 
 class ErrorResponse(BaseModel):
@@ -82,7 +56,7 @@ app = FastAPI(
 )
 
 # 全局变量
-rapper_search_service = None
+rapper_search_service: Optional[RapperSearchService] = None
 
 
 @app.on_event("startup")
@@ -129,7 +103,7 @@ async def health_check():
     }
 
 
-@app.post("/search/rapper", response_model=SearchResponse)
+@app.post("/search/rapper", response_model=AsyncAckResponse)
 async def search_rapper(request: SearchRequest):
     """
     搜索指定rapper的演出信息
@@ -150,23 +124,20 @@ async def search_rapper(request: SearchRequest):
                 detail="搜索服务未初始化"
             )
         
-        print(f"🔍 开始搜索rapper: {request.rapper_name}")
-        
-        # 执行搜索
-        result = await rapper_search_service.search_rapper_performances(
-            rapper_name=request.rapper_name,
-            timeout_seconds=request.timeout_seconds or 300
-        )
-        
-        if result["success"]:
-            print(f"✅ 搜索成功，找到 {result['total_count']} 个演出")
-            return SearchResponse(**result)
-        else:
-            print(f"❌ 搜索失败: {result.get('error_message', '未知错误')}")
-            raise HTTPException(
-                status_code=400,
-                detail=result.get("error_message", "搜索失败")
-            )
+        print(f"📥 接收到异步搜索任务: {request.rapper_name}")
+        service = rapper_search_service
+        assert service is not None
+        async def _job():
+            try:
+                await service.search_rapper_performances(
+                    rapper_name=request.rapper_name,
+                    timeout_seconds=request.timeout_seconds or 300
+                )
+            except Exception as e:
+                print(f"❌ 异步任务执行异常: {str(e)}")
+
+        asyncio.create_task(_job())
+        return AsyncAckResponse(success=True, message="任务已提交", rapper_name=request.rapper_name)
             
     except HTTPException:
         raise
@@ -178,12 +149,15 @@ async def search_rapper(request: SearchRequest):
         )
 
 
+## 已移除独立的异步提交与任务状态接口，统一由 /search/rapper 异步提交实现
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc: HTTPException):
     """HTTP异常处理器"""
     return JSONResponse(
         status_code=exc.status_code,
         content=ErrorResponse(
+            success=False,
             error_message=exc.detail,
             error_code=f"HTTP_{exc.status_code}"
         ).dict()
@@ -196,6 +170,7 @@ async def general_exception_handler(request, exc: Exception):
     return JSONResponse(
         status_code=500,
         content=ErrorResponse(
+            success=False,
             error_message=f"服务器内部错误: {str(exc)}",
             error_code="INTERNAL_SERVER_ERROR"
         ).dict()

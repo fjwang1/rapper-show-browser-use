@@ -15,14 +15,17 @@ Rapper演出信息搜索服务
 import asyncio
 import json
 import os
-from datetime import datetime
-from typing import List, Dict, Any
+from datetime import datetime, date
+import re
+from typing import List, Dict, Any, Optional
 
 from pydantic import BaseModel
 
 from browser_use import Agent, Controller, BrowserSession, BrowserProfile
 from browser_use.llm import ChatDeepSeek
 from browser_use.agent.views import AgentHistoryList
+
+from api.db.repository import init_schema, cleanup_expired_by_rapper, insert_performance_row
 
 
 class TicketPrice(BaseModel):
@@ -51,14 +54,11 @@ class RapperSearchService:
     """Rapper演出信息搜索服务类"""
     
     def __init__(self):
-        """初始化搜索服务"""
-        # 从环境变量获取API密钥，如果没有则使用默认值
         self.deepseek_api_key = os.getenv(
             'DEEPSEEK_API_KEY', 
             'sk-cd4480658d354f9e91d96b66a47cda4a'
         )
         
-        # 配置DeepSeek模型
         self.llm = ChatDeepSeek(
             base_url='https://api.deepseek.com/v1',
             model='deepseek-chat',
@@ -69,6 +69,12 @@ class RapperSearchService:
         self.controller = Controller(output_model=PerformanceResults)
 
         print("🎤 RapperSearchService初始化完成")
+        # 初始化数据库表结构（幂等）
+        try:
+            init_schema()
+            print("🗄️  数据库表已就绪")
+        except Exception as e:
+            print(f"⚠️  初始化数据库表失败: {e}")
 
     def _create_search_task(self, rapper_name: str) -> str:
         task = f"""我想要在秀动网站搜索说唱歌手{rapper_name}的演出信息，你可以参考如下方式：
@@ -102,18 +108,38 @@ class RapperSearchService:
 
         return task
 
-    async def _handle_agent_result(self, history: AgentHistoryList) -> Dict[str, Any]:
-        """
-        处理Agent执行结果
+    def _parse_performance_date(self, date_text: Optional[str]) -> date:
+        """从文本中解析演出日期，仅日期部分。无法解析则返回今天。"""
+        if not date_text:
+            return date.today()
+        # 尝试 YYYY-MM-DD
+        m = re.search(r"(20\\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])", date_text)
+        if m:
+            y, mth, d = m.groups()
+            return date(int(y), int(mth), int(d))
+        # 尝试 MM月DD日（无年份，按今年）
+        m = re.search(r"(0?[1-9]|1[0-2])\\s*月\\s*(0?[1-9]|[12]\\d|3[01])\\s*日", date_text)
+        if m:
+            y = date.today().year
+            mth, d = m.groups()
+            return date(int(y), int(mth), int(d))
+        # 兜底
+        return date.today()
 
-        Args:
-            history: Agent执行历史
-
-        Returns:
-            Dict[str, Any]: 处理后的结果字典
-        """
+    def _parse_price(self, price_text: Optional[str]) -> Optional[float]:
+        """将 '￥158'、'158'、'¥199.00' 等解析为 float；解析失败返回 None。"""
+        if not price_text:
+            return None
         try:
-            # 获取最终结果
+            digits = re.findall(r"[0-9]+(?:\\.[0-9]+)?", price_text)
+            if not digits:
+                return None
+            return float(digits[0])
+        except Exception:
+            return None
+
+    async def _handle_agent_result(self, history: AgentHistoryList, rapper_name: str) -> Dict[str, Any]:
+        try:
             final_result = history.final_result()
 
             if not final_result:
@@ -165,6 +191,38 @@ class RapperSearchService:
             try:
                 validated_results = PerformanceResults.model_validate(performances_data)
                 performances = [perf.dict() for perf in validated_results.performances]
+
+                # 清理过期数据（今天之前）
+                try:
+                    deleted = cleanup_expired_by_rapper(rapper_name)
+                    print(f"🧹 已清理过期记录 {deleted} 条（{rapper_name}）")
+                except Exception as e:
+                    print(f"⚠️ 清理过期记录失败: {e}")
+
+                # 写入结果
+                inserted = 0
+                for perf in performances:
+                    perf_date_text = perf.get("date")
+                    perf_date = self._parse_performance_date(perf_date_text)
+                    price_obj = perf.get("ticket_prices") or {}
+                    row = {
+                        "rapper_name": rapper_name,
+                        "performance_date": perf_date,
+                        "performance_time_text": perf_date_text,
+                        "venue": perf.get("venue"),
+                        "address": perf.get("address"),
+                        "price_presale": self._parse_price(price_obj.get("presale")),
+                        "price_regular": self._parse_price(price_obj.get("regular")),
+                        "price_vip": self._parse_price(price_obj.get("vip")),
+                        "purchase_url": perf.get("performance_url"),
+                        "guests_json": json.dumps(perf.get("guest") or [] , ensure_ascii=False),
+                        "source": "showstart",
+                    }
+                    try:
+                        inserted += insert_performance_row(row)
+                    except Exception as e:
+                        print(f"⚠️ 插入记录失败: {e}，数据: {row}")
+                print(f"📝 本次写入 {inserted} 条记录（{rapper_name}）")
 
                 return {
                     "success": True,
@@ -218,7 +276,7 @@ class RapperSearchService:
             async def result_callback(history: AgentHistoryList):
                 """Agent完成时的回调函数"""
                 if not agent_result["processed"]:
-                    agent_result["data"] = await self._handle_agent_result(history)
+                    agent_result["data"] = await self._handle_agent_result(history, rapper_name)
                     agent_result["processed"] = True
 
             # 使用无头浏览器会话
@@ -254,7 +312,7 @@ class RapperSearchService:
 
             # 如果回调还没有处理结果，手动处理
             if not agent_result["processed"]:
-                agent_result["data"] = await self._handle_agent_result(history)
+                agent_result["data"] = await self._handle_agent_result(history, rapper_name)
 
             result_data = agent_result["data"]
 
