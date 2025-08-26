@@ -4,7 +4,7 @@ import json
 from typing import List
 from pydantic import BaseModel
 
-from browser_use import Agent, Controller
+from browser_use import Agent, Controller, BrowserSession, BrowserProfile
 from browser_use.llm import ChatDeepSeek
 from browser_use.logging_config import setup_logging
 from browser_use.agent.views import AgentHistoryList
@@ -27,7 +27,7 @@ task = """我想要在秀动网站搜索说唱歌手kito的演出信息，你可
       "vip": "￥288"
     },
     "performance_url": "https://www.showstart.com/event/273756"
-  }"""
+}"""
 
 
 class TicketPrice(BaseModel):
@@ -117,10 +117,14 @@ async def main():
     # 创建带有结构化输出的Controller（可选）
     controller = Controller(output_model=PerformanceResults)
 
+    # 使用无头浏览器会话
+    browser_session = BrowserSession(browser_profile=BrowserProfile(headless=True))
+
     agent = Agent(
         task=task,
         llm=llm,
         controller=controller,
+        browser_session=browser_session,
         use_vision=False,
         save_conversation_path='conversation_deepseek.txt',
         register_done_callback=handle_final_result,
