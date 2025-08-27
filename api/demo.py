@@ -89,7 +89,7 @@ async def main():
     print()
     
     # 搜索示例rapper
-    await demo_search_rapper("GAI", api_url)
+    await demo_search_rapper("kito", api_url)
 
     print("🏁 演示完成！")
     print()
