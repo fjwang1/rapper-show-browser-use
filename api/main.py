@@ -11,11 +11,11 @@ Rapper演出信息搜索API服务
 - 返回结构化的演出信息JSON数据
 """
 
-import asyncio
+
 from typing import Optional
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
@@ -29,14 +29,18 @@ from api.rapper_search_service import RapperSearchService
 class SearchRequest(BaseModel):
     """搜索请求模型"""
     rapper_name: str = Field(..., description="说唱歌手名字", min_length=1, max_length=50)
-    timeout_seconds: Optional[int] = Field(300, description="搜索超时时间（秒）", ge=30, le=600)
+    timeout_seconds: Optional[int] = Field(None, description="搜索超时时间（秒，None表示永不超时）", ge=30)
 
 
-class AsyncAckResponse(BaseModel):
-    """异步任务提交确认响应模型"""
-    success: bool = Field(True, description="是否提交成功")
-    message: str = Field("任务已提交", description="提示信息")
-    rapper_name: str = Field(..., description="提交的rapper名字")
+class SearchResponse(BaseModel):
+    """搜索结果响应模型"""
+    success: bool = Field(..., description="搜索是否成功")
+    rapper_name: str = Field(..., description="搜索的rapper名字")
+    performances: list = Field(default_factory=list, description="演出信息列表")
+    total_count: int = Field(0, description="演出总数")
+    search_time: str = Field(..., description="搜索时间")
+    execution_stats: dict = Field(default_factory=dict, description="执行统计信息")
+    error_message: Optional[str] = Field(None, description="错误信息")
 
 
 class ErrorResponse(BaseModel):
@@ -103,10 +107,10 @@ async def health_check():
     }
 
 
-@app.post("/search/rapper", response_model=AsyncAckResponse)
+@app.post("/search/rapper", response_model=SearchResponse)
 async def search_rapper(request: SearchRequest):
     """
-    搜索指定rapper的演出信息
+    同步搜索指定rapper的演出信息
     
     Args:
         request: 包含rapper名字和搜索参数的请求
@@ -124,20 +128,16 @@ async def search_rapper(request: SearchRequest):
                 detail="搜索服务未初始化"
             )
         
-        print(f"📥 接收到异步搜索任务: {request.rapper_name}")
-        service = rapper_search_service
-        assert service is not None
-        async def _job():
-            try:
-                await service.search_rapper_performances(
-                    rapper_name=request.rapper_name,
-                    timeout_seconds=request.timeout_seconds or 300
-                )
-            except Exception as e:
-                print(f"❌ 异步任务执行异常: {str(e)}")
-
-        asyncio.create_task(_job())
-        return AsyncAckResponse(success=True, message="任务已提交", rapper_name=request.rapper_name)
+        print(f"📥 开始同步搜索任务: {request.rapper_name}")
+        
+        # 同步等待搜索完成，不设置超时限制
+        result = await rapper_search_service.search_rapper_performances(
+            rapper_name=request.rapper_name,
+            timeout_seconds=request.timeout_seconds  # None表示永不超时
+        )
+        
+        print(f"✅ 搜索任务完成: {request.rapper_name}")
+        return result
             
     except HTTPException:
         raise
@@ -149,7 +149,7 @@ async def search_rapper(request: SearchRequest):
         )
 
 
-## 已移除独立的异步提交与任务状态接口，统一由 /search/rapper 异步提交实现
+## 修改为同步等待模式，解决WebSocket连接问题
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc: HTTPException):
@@ -184,5 +184,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         reload=True,
-        log_level="info"
+        log_level="info",
+        timeout_keep_alive=1200,  # 保持连接1200秒
+        timeout_graceful_shutdown=60  # 优雅关闭60秒
     )

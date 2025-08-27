@@ -249,14 +249,14 @@ class RapperSearchService:
     async def search_rapper_performances(
         self,
         rapper_name: str,
-        timeout_seconds: int = 300
+        timeout_seconds: Optional[int] = 300
     ) -> Dict[str, Any]:
         """
         搜索指定rapper的演出信息
 
         Args:
             rapper_name: rapper名字
-            timeout_seconds: 搜索超时时间（秒）
+            timeout_seconds: 搜索超时时间（秒），None表示永不超时
 
         Returns:
             Dict[str, Any]: 包含搜索结果的字典
@@ -294,10 +294,15 @@ class RapperSearchService:
 
             # 执行搜索，带超时控制
             try:
-                history = await asyncio.wait_for(
-                    agent.run(),
-                    timeout=timeout_seconds
-                )
+                if timeout_seconds is None:
+                    # 永不超时
+                    history = await agent.run()
+                else:
+                    # 有超时限制
+                    history = await asyncio.wait_for(
+                        agent.run(),
+                        timeout=timeout_seconds
+                    )
             except asyncio.TimeoutError:
                 return {
                     "success": False,

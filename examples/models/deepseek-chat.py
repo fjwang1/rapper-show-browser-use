@@ -11,37 +11,28 @@ from browser_use.agent.views import AgentHistoryList
 
 deepseek_api_key = 'sk-cd4480658d354f9e91d96b66a47cda4a'
 
-task = """我想要在秀动网站搜索说唱歌手kito的演出信息，你可以参考如下方式：
-1、打开https://www.showstart.com/ 秀动网站。
-2、在右上角搜索框输入"kito"，并获取kito所有的演出信息。
-3、提取出演出地点、演出场地、演出嘉宾、演出时间、票价以及演出链接。
+task = """我想要在秀动网站搜索说唱歌手kito的演出信息，请按照以下方式操作：
+1、直接打开 https://www.showstart.com/event/list?keyword=kito 进入kito的搜索结果页面。
+2、从搜索结果页面直接提取每场演出的基本信息：演出名称、艺人、价格、时间、场地、演出头图（可能需要extract_structured_data工具提取，其中参数extract_links为true才能拿到头图链接）。
+3、点击每个演出卡片进入详情页，仅获取该页面的URL作为购买链接，无需提取其他DOM元素。
 最终返回的结果是json格式的，如下所示：
 {
-    "address": "广州市荔湾区恩宁路265号3层",
-    "venue": "MAOLivehouse广州（永庆坊店）",
-    "date": "08月24日 19:00-08月24日 20:30",
-    "guest": ["SHark米尔艾力", "LilAsian"],
-    "ticket_prices": {
-      "presale": "￥158",
-      "regular": "￥198", 
-      "vip": "￥288"
-    },
-    "performance_url": "https://www.showstart.com/event/273756"
+    "mainImage": "https://s2.showstart.com/img/2025/0813/16/30/3d8dbf67b3834e9891c4bd18009ca737_2988_5257_6400974.0x0.png",
+    "title": "2025 KITO\"KDAY\" KITO TOUR 巡演（北京站）",
+    "artists": ["黄旭", "KITO", "Vinz-T"],
+    "price": "¥158起",
+    "date": "2025/09/07 19:00",
+    "venue": "[北京]MAO Livehouse北京（五棵松店）",
+    "purchase_url": "https://www.showstart.com/event/273756"
 }"""
 
-
-class TicketPrice(BaseModel):
-    presale: str
-    regular: str
-    vip: str
-
 class PerformanceInfo(BaseModel):
-    address: str
-    venue: str
+    title: str
+    artists: List[str]
+    price: str
     date: str
-    guest: List[str]
-    ticket_prices: TicketPrice
-    performance_url: str
+    venue: str
+    purchase_url: str
 
 class PerformanceResults(BaseModel):
     performances: List[PerformanceInfo]
@@ -64,7 +55,7 @@ async def handle_final_result(history: AgentHistoryList):
             print(json.dumps(result_json, ensure_ascii=False, indent=2))
 
             # 如果是单个演出信息，转换为列表格式
-            if isinstance(result_json, dict) and 'address' in result_json:
+            if isinstance(result_json, dict) and 'title' in result_json:
                 result_json = {'performances': [result_json]}
 
             # 验证结构化输出
@@ -73,13 +64,12 @@ async def handle_final_result(history: AgentHistoryList):
                 print("\n验证通过的结构化数据:")
                 for i, perf in enumerate(performances.performances, 1):
                     print(f"\n演出 {i}:")
-                    print(f"  地址: {perf.address}")
-                    print(f"  场地: {perf.venue}")
+                    print(f"  名称: {perf.title}")
+                    print(f"  艺人: {', '.join(perf.artists)}")
+                    print(f"  价格: {perf.price}")
                     print(f"  时间: {perf.date}")
-                    print(f"  嘉宾: {', '.join(perf.guest)}")
-                    print(
-                        f"  票价: 预售{perf.ticket_prices.presale}, 正价{perf.ticket_prices.regular}, VIP{perf.ticket_prices.vip}")
-                    print(f"  链接: {perf.performance_url}")
+                    print(f"  场地: {perf.venue}")
+                    print(f"  购买链接: {perf.purchase_url}")
         except json.JSONDecodeError:
             print("结果不是有效的JSON格式")
         except Exception as e:
@@ -124,7 +114,7 @@ async def main():
         task=task,
         llm=llm,
         controller=controller,
-        browser_session=browser_session,
+        # browser_session=browser_session,
         use_vision=False,
         save_conversation_path='conversation_deepseek.txt',
         register_done_callback=handle_final_result,

@@ -627,6 +627,7 @@ Provide the extracted information in a clear, structured format."""
 					include_extracted_content_only_once = False
 				else:
 					save_result = await file_system.save_extracted_content(extracted_content)
+					print(f'Saved extracted content to {save_result}, and extracted_content: {extracted_content}')
 					current_url = await browser_session.get_current_page_url()
 					memory = (
 						f'Extracted content from {current_url} for query: {query}\nContent saved to file system: {save_result}'
