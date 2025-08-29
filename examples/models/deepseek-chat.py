@@ -13,8 +13,9 @@ deepseek_api_key = 'sk-cd4480658d354f9e91d96b66a47cda4a'
 
 task = """我想要在秀动网站搜索说唱歌手kito的演出信息，请按照以下方式操作：
 1、直接打开 https://www.showstart.com/event/list?keyword=kito 进入kito的搜索结果页面。
-2、从搜索结果页面直接提取每场演出的基本信息：演出名称、艺人、价格、时间、场地、演出头图（可能需要extract_structured_data工具提取，其中参数extract_links为true才能拿到头图链接）。
-3、点击每个演出卡片进入详情页，仅获取该页面的URL作为购买链接，无需提取其他DOM元素。
+2、通过extract_rapper_shows_data_for_showstar工具提取从搜索结果页面提取出所有演出信息：演出名称、艺人、价格、时间、场地、演出头图、链接等。
+3、其中演出链接在<a href="/event/274673" class="show-item item" data-v-45a60ebc="">标签的href属性中，需要再补上固定的host和Protocol，如https://www.showstart.com/event/274673。
+4、你应该调用一次工具即可获取所有演出信息，直接返回即可。不需要后续操作。
 最终返回的结果是json格式的，如下所示：
 {
     "mainImage": "https://s2.showstart.com/img/2025/0813/16/30/3d8dbf67b3834e9891c4bd18009ca737_2988_5257_6400974.0x0.png",

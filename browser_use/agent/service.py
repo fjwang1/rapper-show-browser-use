@@ -779,7 +779,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		self.logger.debug(f'⚡ Step {self.state.n_steps}: Executing {len(self.state.last_model_output.action)} actions...')
 		result = await self.multi_act(self.state.last_model_output.action)
-		self.logger.debug(f'✅ Step {self.state.n_steps}: Actions completed')
+		self.logger.debug(f'✅ Step {self.state.n_steps}: Actions completed, and result: {result}')
 
 		self.state.last_result = result
 

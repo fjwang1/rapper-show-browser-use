@@ -645,6 +645,101 @@ Provide the extracted information in a clear, structured format."""
 				raise RuntimeError(str(e))
 
 		@self.registry.action(
+			"""extract_structured_data 方法将很多超链接、超文本都去除了，但是有些时候是需要这些信息，因此在这里扩展一个方法
+			""",
+		)
+		async def extract_rapper_shows_data_for_showstar(
+			query: str,
+			browser_session: BrowserSession,
+			page_extraction_llm: BaseChatModel,
+			file_system: FileSystem,
+		):
+			cdp_session = await browser_session.get_or_create_cdp_session()
+
+			# Wait for the page to be ready (same pattern used in DOM service)
+			try:
+				ready_state = await cdp_session.cdp_client.send.Runtime.evaluate(
+					params={'expression': 'document.readyState'}, session_id=cdp_session.session_id
+				)
+			except Exception:
+				pass  # Page might not be ready yet
+
+			try:
+				# Get the HTML content
+				body_id = await cdp_session.cdp_client.send.DOM.getDocument(session_id=cdp_session.session_id)
+				page_html_result = await cdp_session.cdp_client.send.DOM.getOuterHTML(
+					params={'backendNodeId': body_id['root']['backendNodeId']},
+					session_id=cdp_session.session_id
+				)
+			except Exception as e:
+				raise RuntimeError(f"Couldn't extract page content: {e}")
+
+			page_html = page_html_result['outerHTML']
+
+			# Simple markdown conversion
+			try:
+				import re
+
+				import markdownify
+
+				content = page_html
+
+				content = re.sub(r'❓\s*\[\d+\]\s*\w+.*?Position:.*?Size:.*?\n?', '', content,
+								 flags=re.MULTILINE | re.DOTALL)
+				content = re.sub(r'Primary: UNKNOWN\n\nNo specific evidence found', '', content,
+								 flags=re.MULTILINE | re.DOTALL)
+				content = re.sub(r'UNKNOWN CONFIDENCE', '', content, flags=re.MULTILINE | re.DOTALL)
+				content = re.sub(r'!\[\]\(\)', '', content, flags=re.MULTILINE | re.DOTALL)
+			except Exception as e:
+				raise RuntimeError(f'Could not convert html to markdown: {type(e).__name__}')
+
+			# Simple truncation to 30k characters
+			if len(content) > 30000:
+				content = content[20000:50000] + '\n\n... [Content truncated, showing characters 20000-50000] ...'
+
+			# Simple prompt
+			prompt = f"""Extract the requested information from this webpage content.
+
+Query: {query}
+
+Webpage Content:
+{content}
+
+Provide the extracted information in a clear, structured format."""
+
+			try:
+				response = await asyncio.wait_for(
+					page_extraction_llm.ainvoke([UserMessage(content=prompt)]),
+					timeout=120.0,
+				)
+
+				extracted_content = f'Query: {query}\n Result:\n{response.completion}'
+
+				# Simple memory handling
+				if len(extracted_content) < 1000:
+					memory = extracted_content
+					include_extracted_content_only_once = False
+				else:
+					save_result = await file_system.save_extracted_content(extracted_content)
+					print(
+						f'Saved extracted content to {save_result}, and extracted_content: {extracted_content}')
+					current_url = await browser_session.get_current_page_url()
+					memory = (
+						f'Extracted content from {current_url} for query: {query}\nContent saved to file system: {save_result}'
+					)
+					include_extracted_content_only_once = True
+
+				logger.info(f'📄 {memory}')
+				return ActionResult(
+					extracted_content=extracted_content,
+					include_extracted_content_only_once=include_extracted_content_only_once,
+					long_term_memory=memory,
+				)
+			except Exception as e:
+				logger.debug(f'Error extracting content: {e}')
+				raise RuntimeError(str(e))
+
+		@self.registry.action(
 			'Scroll the page by specified number of pages (set down=True to scroll down, down=False to scroll up, num_pages=number of pages to scroll like 0.5 for half page, 1.0 for one page, etc.). Optional index parameter to scroll within a specific element or its scroll container (works well for dropdowns and custom UI components). Use index=0 or omit index to scroll the entire page.',
 			param_model=ScrollAction,
 		)
